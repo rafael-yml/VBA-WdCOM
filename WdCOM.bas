@@ -1,63 +1,24 @@
 Attribute VB_Name = "WdCOM"
 Option Explicit
 
-' Opens a PDF in an isolated hidden Word instance using Word's built-in PDF-to-DOCX
-' converter and returns the document text. Entirely late-bound - no VBA references needed.
-'
-' --- Pre-flight ---
-' WdCOM_IsWordInstalled - cached check whether Word is available on this machine
-' Word_IsWordDocument   - magic-byte pre-flight: is this file a .docx or .doc?
-'
-' --- PDF entry point ---
-' PDF_WordCOM           - open a PDF, return text or "" on failure
-' WdCOM_LastStatus      - status code from the most recent PDF_WordCOM or Word_ExtractText call
-'
-' --- Open document operations ---
-' Word_ExtractText      - return cleaned text from an already-open Word document directly
-' Word_PageCount        - return the page count of an already-open Word document (fast or accurate)
-' Word_ExportImages     - save all images from an open Word doc to numbered PNG files
-' Word_GetImages        - return all images from an open Word doc as in-memory byte arrays
-'
-' Requirements: Microsoft Word installed (except Word_IsWordDocument, which reads magic bytes).
-' Word_ExportImages and Word_GetImages require an Excel host
-' (use a hidden ChartObject for clipboard-to-PNG conversion).
-'
-' Word's PDF converter can stall indefinitely on pathologically corrupt files.
-' Documents.Open is synchronous with no timeout available in VBA.
-' OpenAndRepair:=False prevents the most common cause but cannot guarantee termination.
+Public Const WDCOM_OK           As Long = 0
+Public Const WDCOM_FILE_MISSING As Long = 1
+Public Const WDCOM_ENCRYPTED    As Long = 2
+Public Const WDCOM_WORD_FAILED  As Long = 3
+Public Const WDCOM_OPEN_FAILED  As Long = 4
+Public Const WDCOM_EMPTY        As Long = 5
+Public Const WDCOM_GARBLED      As Long = 6
 
-' --- Status codes set by PDF_WordCOM and Word_ExtractText, readable via WdCOM_LastStatus() ---
-Public Const WDCOM_OK           As Long = 0   ' text extracted successfully
-Public Const WDCOM_FILE_MISSING As Long = 1   ' file not found
-Public Const WDCOM_ENCRYPTED    As Long = 2   ' /Encrypt detected - Word cannot open
-Public Const WDCOM_WORD_FAILED  As Long = 3   ' Word not installed or failed to start
-Public Const WDCOM_OPEN_FAILED  As Long = 4   ' Documents.Open raised error or returned Nothing
-Public Const WDCOM_EMPTY        As Long = 5   ' extracted text too short to be useful
-Public Const WDCOM_GARBLED      As Long = 6   ' avg word length too high - encoding failure
-
-' --- msoShapeType values covered by Word_ExportImages / Word_GetImages ---
-Private Const MSO_EMBEDDED_OLE   As Long = 7   ' embedded OLE object (some PDF images land here)
-Private Const MSO_LINKED_PICTURE As Long = 11  ' linked image file
-Private Const MSO_PICTURE        As Long = 13  ' picture shape
-
-' Credibility heuristic uses the first MAX_SAMPLE_CHARS characters as a probe.
-' Documents longer than this are not rejected - only the sample is tested.
-Private Const MAX_SAMPLE_CHARS  As Long   = 100000
+Private Const MSO_EMBEDDED_OLE   As Long = 7
+Private Const MSO_LINKED_PICTURE As Long = 11
+Private Const MSO_PICTURE        As Long = 13
+Private Const MAX_SAMPLE_CHARS  As Long = 100000
 Private Const MAX_AVG_WORDLEN   As Double = 25#
 
 Private m_lLastStatus As Long
 
-' ===========================================================================
-' Pre-flight
-' ===========================================================================
-
-' ---------------------------------------------------------------------------
-' Returns True if Word can be started via COM. Caches a successful result so
-' subsequent calls are instant. Failure is never cached - a transient issue
-' (Word mid-update, hung COM surrogate) won't poison the session.
-' ---------------------------------------------------------------------------
 Public Function WdCOM_IsWordInstalled() As Boolean
-    Static lCached As Long   ' 0 = unchecked, 1 = confirmed installed (failure never cached)
+    Static lCached As Long
     If lCached = 1 Then
         WdCOM_IsWordInstalled = True
         Exit Function
@@ -76,15 +37,6 @@ Public Function WdCOM_IsWordInstalled() As Boolean
     End If
 End Function
 
-' ---------------------------------------------------------------------------
-' Returns True if the file is likely a Word document (.docx, .docm, .doc).
-' Uses magic bytes for the primary check and the file extension to disambiguate:
-' .docx/.docm and .xlsx/.pptx all share the ZIP header (PK\x03\x04), so the
-' extension is required to tell them apart.
-'   .docx / .docm : ZIP header + doc extension
-'   .doc          : OLE compound document header (D0 CF 11 E0)
-' Does not require Word to be installed.
-' ---------------------------------------------------------------------------
 Public Function Word_IsWordDocument(ByVal sFilePath As String) As Boolean
     Const ZIP_MAGIC As String = "PK" & Chr(3) & Chr(4)
     Const OLE_MAGIC As String = Chr(&HD0) & Chr(&HCF) & Chr(&H11) & Chr(&HE0)
@@ -112,15 +64,6 @@ Done:
     On Error GoTo 0
 End Function
 
-' ===========================================================================
-' PDF entry point
-' ===========================================================================
-
-' ---------------------------------------------------------------------------
-' Opens a PDF in an isolated hidden Word instance, extracts and returns text.
-' Returns "" on any failure. Call WdCOM_LastStatus() afterwards to find out why.
-' Long documents are not rejected - credibility is checked on a sample only.
-' ---------------------------------------------------------------------------
 Public Function PDF_WordCOM(ByVal sFilePath As String) As String
     Dim oWord  As Object
     Dim oDoc   As Object
@@ -149,17 +92,17 @@ Public Function PDF_WordCOM(ByVal sFilePath As String) As String
     End If
 
     On Error Resume Next
-    oWord.Visible                     = False
-    oWord.DisplayAlerts               = 0
-    oWord.Options.ConfirmConversions  = False
-    oWord.Options.UpdateLinksAtOpen   = False
+    oWord.Visible = False
+    oWord.DisplayAlerts = 0
+    oWord.Options.ConfirmConversions = False
+    oWord.Options.UpdateLinksAtOpen = False
     oWord.Options.UpdateFieldsAtPrint = False
-    oWord.AutomationSecurity          = 3
+    oWord.AutomationSecurity = 3
     On Error GoTo 0
 
     On Error GoTo OpenFailed
     Set oDoc = oWord.Documents.Open( _
-        FileName:=sFilePath, _
+        Filename:=sFilePath, _
         ConfirmConversions:=False, _
         ReadOnly:=True, _
         AddToRecentFiles:=False, _
@@ -199,24 +142,10 @@ Cleanup:
     On Error GoTo 0
 End Function
 
-' ---------------------------------------------------------------------------
-' Returns the status code from the most recent PDF_WordCOM or Word_ExtractText call.
-' Compare against the WDCOM_* constants declared above.
-' ---------------------------------------------------------------------------
 Public Function WdCOM_LastStatus() As Long
     WdCOM_LastStatus = m_lLastStatus
 End Function
 
-' ===========================================================================
-' Open document operations
-' ===========================================================================
-
-' ---------------------------------------------------------------------------
-' Return the cleaned text of an already-open Word document directly.
-' Applies the same credibility check and line-ending normalisation as PDF_WordCOM.
-' Sets WdCOM_LastStatus(). Returns "" if Content.Text is unavailable or fails
-' the credibility check.
-' ---------------------------------------------------------------------------
 Public Function Word_ExtractText(ByVal oDoc As Object) As String
     Dim sText  As String
     Dim lCheck As Long
@@ -233,35 +162,20 @@ Public Function Word_ExtractText(ByVal oDoc As Object) As String
     End If
 End Function
 
-' ---------------------------------------------------------------------------
-' Returns the page count of an already-open Word document.
-' bFast = False (default): ComputeStatistics(2) - accurate but repaginates the
-'         document, which can take several seconds on a large file.
-' bFast = True: BuiltInDocumentProperties(14) - instant but reflects the
-'         last-saved count, which may be stale if the doc has been edited.
-' Returns 0 on complete failure.
-' ---------------------------------------------------------------------------
-Public Function Word_PageCount(ByVal oDoc As Object, _
-                               Optional ByVal bFast As Boolean = False) As Long
+Public Function Word_PageCount(ByVal oDoc As Object, Optional ByVal bFast As Boolean = False) As Long
     Word_PageCount = 0
     On Error Resume Next
     If bFast Then
-        Word_PageCount = oDoc.BuiltInDocumentProperties(14)  ' wdPropertyPages - instant
+        Word_PageCount = oDoc.BuiltinDocumentProperties(14)
     Else
-        Word_PageCount = oDoc.ComputeStatistics(2)           ' wdStatisticPages - repaginates
+        Word_PageCount = oDoc.ComputeStatistics(2)
         If Word_PageCount = 0 Then _
-            Word_PageCount = oDoc.BuiltInDocumentProperties(14)
+            Word_PageCount = oDoc.BuiltinDocumentProperties(14)
     End If
     On Error GoTo 0
 End Function
 
-' ---------------------------------------------------------------------------
-' Export all images from an open Word document to numbered PNG files.
-' Covers InlineShapes and floating Shapes (pictures, linked pictures, OLE).
-' Requires Excel host - uses a hidden ChartObject for clipboard-to-PNG export.
-' ---------------------------------------------------------------------------
-Public Sub Word_ExportImages(ByVal oDoc          As Object, _
-                             ByVal sOutputFolder As String)
+Public Sub Word_ExportImages(ByVal oDoc As Object, ByVal sOutputFolder As String)
     If Right$(sOutputFolder, 1) <> "\" Then sOutputFolder = sOutputFolder & "\"
     If Len(Dir(sOutputFolder, vbDirectory)) = 0 Then
         On Error Resume Next
@@ -314,78 +228,14 @@ Cleanup:
     On Error GoTo 0
 End Sub
 
-' ---------------------------------------------------------------------------
-' Return all images from an open Word document as a Collection of Byte arrays.
-' Each item is a Byte() containing the raw PNG bytes of one image.
-' Covers the same shape types as Word_ExportImages.
-' Returns an empty Collection on complete failure - never returns Nothing.
-' Requires Excel host.
-' ---------------------------------------------------------------------------
 Public Function Word_GetImages(ByVal oDoc As Object) As Collection
-    Dim oResult  As New Collection
-    Dim oWs      As Worksheet
-    Dim oIS      As Object
-    Dim oSh      As Object
-    Dim sTmp     As String
-    Dim aBytes() As Byte
 
-    Set oWs = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
-    oWs.Visible = xlSheetVeryHidden
-
-    On Error Resume Next
-
-    For Each oIS In oDoc.InlineShapes
-        Err.Clear
-        oIS.Range.CopyAsPicture
-        If Err.Number = 0 Then
-            sTmp = WordCOM_TempPath()
-            If WordCOM_PasteToFile(oWs, oIS.Width, oIS.Height, sTmp) Then
-                aBytes = WordCOM_ReadBytes(sTmp)
-                If UBound(aBytes) > 0 Then oResult.Add aBytes
-            End If
-        End If
-    Next oIS
-
-    For Each oSh In oDoc.Shapes
-        If oSh.Type = MSO_PICTURE Or _
-           oSh.Type = MSO_LINKED_PICTURE Or _
-           oSh.Type = MSO_EMBEDDED_OLE Then
-            Err.Clear
-            oSh.CopyAsPicture
-            If Err.Number = 0 Then
-                sTmp = WordCOM_TempPath()
-                If WordCOM_PasteToFile(oWs, oSh.Width, oSh.Height, sTmp) Then
-                    aBytes = WordCOM_ReadBytes(sTmp)
-                    If UBound(aBytes) > 0 Then oResult.Add aBytes
-                End If
-            End If
-        End If
-    Next oSh
-
-    On Error GoTo 0
-
-Cleanup:
-    On Error Resume Next
-    Application.DisplayAlerts = False
-    If Not oWs Is Nothing Then oWs.Delete
-    Application.DisplayAlerts = True
-    Set oWs = Nothing
-    On Error GoTo 0
-
-    Set Word_GetImages = oResult
 End Function
 
-' ===========================================================================
-' Private helpers
-' ===========================================================================
-
-' Paste whatever is on the clipboard into a ChartObject and export to sPath as PNG.
-' Assumes the caller has already called CopyAsPicture on the source shape.
-' Returns True on success, False on any failure. Cleans up ChartObject either way.
-Private Function WordCOM_PasteToFile(ByVal oWs    As Worksheet, _
-                                     ByVal dWidth  As Double, _
-                                     ByVal dHeight As Double, _
-                                     ByVal sPath   As String) As Boolean
+Private Function WordCOM_PasteToFile(ByVal oWs As Worksheet, _
+                                   ByVal dWidth As Double, _
+                                   ByVal dHeight As Double, _
+                                   ByVal sPath As String) As Boolean
     Dim oChart As ChartObject
     On Error GoTo Failed
     Set oChart = oWs.ChartObjects.Add(0, 0, dWidth, dHeight)
@@ -403,8 +253,6 @@ Failed:
     WordCOM_PasteToFile = False
 End Function
 
-' Read the entire contents of a file into a Byte array, then delete the file.
-' Returns a zero-length array on any failure.
 Private Function WordCOM_ReadBytes(ByVal sPath As String) As Byte()
     Dim aEmpty(0) As Byte
     Dim iFile     As Integer
@@ -432,8 +280,6 @@ Failed:
     On Error GoTo 0
 End Function
 
-' Generate a unique temp file path under %TEMP%.
-' Prefix includes a timestamp so names survive VBA project resets (which reset Static vars).
 Private Function WordCOM_TempPath() As String
     Static lSeq     As Long
     Static sSession As String
@@ -442,10 +288,6 @@ Private Function WordCOM_TempPath() As String
     WordCOM_TempPath = Environ("TEMP") & "\wdcom_" & sSession & "_" & lSeq & ".png"
 End Function
 
-' Checks text quality on a sample. Returns WDCOM_OK or a specific failure code.
-' Long documents are not penalised - only MAX_SAMPLE_CHARS characters are sampled.
-' Counts Chr(13) and Chr(10) as word separators alongside spaces: Word's Content.Text
-' uses Chr(13) for paragraph breaks, so a bullet-list doc would have no spaces at all.
 Private Function WordCOM_CheckCredibility(ByVal sText As String) As Long
     Dim sSample As String
     Dim lSeps   As Long
@@ -457,14 +299,14 @@ Private Function WordCOM_CheckCredibility(ByVal sText As String) As Long
     End If
 
     sSample = Left$(sText, MAX_SAMPLE_CHARS)
-    lSeps = Len(sSample) - Len(Replace(sSample, " ",     "")) _
+    lSeps = Len(sSample) - Len(Replace(sSample, " ", "")) _
           + Len(sSample) - Len(Replace(sSample, Chr(13), "")) _
           + Len(sSample) - Len(Replace(sSample, Chr(10), ""))
 
     If lSeps > 0 Then
         dAvg = Len(sSample) / CDbl(lSeps + 1)
     Else
-        dAvg = Len(sSample)   ' no separators at all: treat entire sample as one token
+        dAvg = Len(sSample)
     End If
 
     If dAvg > MAX_AVG_WORDLEN Then
@@ -474,7 +316,6 @@ Private Function WordCOM_CheckCredibility(ByVal sText As String) As Long
     End If
 End Function
 
-' Returns True if the PDF contains an /Encrypt key in its header or trailer.
 Private Function WordCOM_IsEncrypted(ByVal sFilePath As String) As Boolean
     Const HEAD_READ As Long = 512
     Const TAIL_READ As Long = 2048
@@ -502,17 +343,16 @@ NotEncrypted:
     WordCOM_IsEncrypted = False
 End Function
 
-' Returns True if s contains /Encrypt as a standalone PDF key (not /Encrypted etc.).
 Private Function WordCOM_HasEncryptKey(ByVal s As String) As Boolean
-    Const KEY As String = "/Encrypt"
+    Const key As String = "/Encrypt"
     Dim p   As Long
     Dim pos As Long
     Dim nxt As String
     p = 1
     Do
-        p = InStr(p, s, KEY, vbBinaryCompare)
+        p = InStr(p, s, key, vbBinaryCompare)
         If p = 0 Then Exit Do
-        pos = p + Len(KEY)
+        pos = p + Len(key)
         If pos > Len(s) Then
             WordCOM_HasEncryptKey = True
             Exit Function
@@ -526,7 +366,6 @@ Private Function WordCOM_HasEncryptKey(ByVal s As String) As Boolean
     Loop
 End Function
 
-' Normalise line endings and collapse consecutive blank lines to at most one.
 Private Function WordCOM_CleanText(ByVal sText As String) As String
     Dim s          As String
     Dim aLines()   As String
