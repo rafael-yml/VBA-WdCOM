@@ -1,4 +1,12 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
 Attribute VB_Name = "WdCOM"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
 Option Explicit
 
 Private Type GUID
@@ -25,15 +33,41 @@ Public Const WDCOM_GARBLED      As Long = 6
 Private Const MSO_EMBEDDED_OLE   As Long = 7
 Private Const MSO_LINKED_PICTURE As Long = 11
 Private Const MSO_PICTURE        As Long = 13
-Private Const MAX_SAMPLE_CHARS  As Long = 100000
-Private Const MAX_AVG_WORDLEN   As Double = 25#
+Private Const MAX_SAMPLE_CHARS   As Long = 100000
 
-Private m_lLastStatus As Long
+' ---------------------------------------------------------------------------
+' Instance state
+' ---------------------------------------------------------------------------
+Private m_lLastStatus   As Long
+Private m_dGarbleThresh As Double
 
-Public Function WdCOM_IsWordInstalled() As Boolean
+' ---------------------------------------------------------------------------
+' Properties
+' ---------------------------------------------------------------------------
+
+Public Property Get LastStatus() As Long
+    LastStatus = m_lLastStatus
+End Property
+
+' Average word length above which extracted text is considered garbled (default 25).
+' Word's Content.Text uses Chr(13) for paragraph breaks; the credibility check
+' counts spaces, Chr(10), and Chr(13) as separators. Raise for languages with
+' long compound words; lower for stricter detection.
+Public Property Get GarbleThreshold() As Double
+    GarbleThreshold = m_dGarbleThresh
+End Property
+Public Property Let GarbleThreshold(ByVal dVal As Double)
+    If dVal > 0 Then m_dGarbleThresh = dVal
+End Property
+
+Private Sub Class_Initialize()
+    m_dGarbleThresh = 25#
+End Sub
+
+Public Function IsWordInstalled() As Boolean
     Static lCached As Long
     If lCached = 1 Then
-        WdCOM_IsWordInstalled = True
+        IsWordInstalled = True
         Exit Function
     End If
     Dim oWord As Object
@@ -46,17 +80,17 @@ Public Function WdCOM_IsWordInstalled() As Boolean
         Set oWord = Nothing
         On Error GoTo 0
         lCached = 1
-        WdCOM_IsWordInstalled = True
+        IsWordInstalled = True
     End If
 End Function
 
-Public Function Word_IsWordDocument(ByVal sFilePath As String) As Boolean
+Public Function IsWordDocument(ByVal sFilePath As String) As Boolean
     Const ZIP_MAGIC As String = "PK" & Chr(3) & Chr(4)
     Const OLE_MAGIC As String = Chr(&HD0) & Chr(&HCF) & Chr(&H11) & Chr(&HE0)
     Dim iFile   As Integer
     Dim sHeader As String
     Dim sExt    As String
-    Word_IsWordDocument = False
+    IsWordDocument = False
     If Len(Dir(sFilePath)) = 0 Then Exit Function
     sExt = LCase$(Mid$(sFilePath, InStrRev(sFilePath, ".") + 1))
     On Error GoTo Done
@@ -67,9 +101,9 @@ Public Function Word_IsWordDocument(ByVal sFilePath As String) As Boolean
     Close #iFile
     iFile = 0
     If sHeader = OLE_MAGIC Then
-        Word_IsWordDocument = (sExt = "doc")
+        IsWordDocument = (sExt = "doc")
     ElseIf sHeader = ZIP_MAGIC Then
-        Word_IsWordDocument = (sExt = "docx" Or sExt = "docm")
+        IsWordDocument = (sExt = "docx" Or sExt = "docm")
     End If
 Done:
     On Error Resume Next
@@ -77,14 +111,14 @@ Done:
     On Error GoTo 0
 End Function
 
-Public Function PDF_WordCOM(ByVal sFilePath As String) As String
+Public Function ExtractText(ByVal sFilePath As String) As String
     Dim oWord  As Object
     Dim oDoc   As Object
     Dim sText  As String
     Dim lCheck As Long
 
     m_lLastStatus = WDCOM_OK
-    PDF_WordCOM = ""
+    ExtractText = ""
 
     If Len(Dir(sFilePath)) = 0 Then
         m_lLastStatus = WDCOM_FILE_MISSING
@@ -138,7 +172,7 @@ Public Function PDF_WordCOM(ByVal sFilePath As String) As String
         GoTo Cleanup
     End If
 
-    PDF_WordCOM = WordCOM_CleanText(sText)
+    ExtractText = WordCOM_CleanText(sText)
     GoTo Cleanup
 
 OpenFailed:
@@ -155,40 +189,36 @@ Cleanup:
     On Error GoTo 0
 End Function
 
-Public Function WdCOM_LastStatus() As Long
-    WdCOM_LastStatus = m_lLastStatus
-End Function
-
-Public Function Word_ExtractText(ByVal oDoc As Object) As String
+Public Function ExtractDocText(ByVal oDoc As Object) As String
     Dim sText  As String
     Dim lCheck As Long
     m_lLastStatus = WDCOM_OK
-    Word_ExtractText = ""
+    ExtractDocText = ""
     On Error Resume Next
     sText = oDoc.Content.Text
     On Error GoTo 0
     lCheck = WordCOM_CheckCredibility(sText)
     If lCheck = WDCOM_OK Then
-        Word_ExtractText = WordCOM_CleanText(sText)
+        ExtractDocText = WordCOM_CleanText(sText)
     Else
         m_lLastStatus = lCheck
     End If
 End Function
 
-Public Function Word_PageCount(ByVal oDoc As Object, Optional ByVal bFast As Boolean = False) As Long
-    Word_PageCount = 0
+Public Function PageCount(ByVal oDoc As Object, Optional ByVal bFast As Boolean = False) As Long
+    PageCount = 0
     On Error Resume Next
     If bFast Then
-        Word_PageCount = oDoc.BuiltinDocumentProperties(14)
+        PageCount = oDoc.BuiltinDocumentProperties(14)
     Else
-        Word_PageCount = oDoc.ComputeStatistics(2)
-        If Word_PageCount = 0 Then _
-            Word_PageCount = oDoc.BuiltinDocumentProperties(14)
+        PageCount = oDoc.ComputeStatistics(2)
+        If PageCount = 0 Then _
+            PageCount = oDoc.BuiltinDocumentProperties(14)
     End If
     On Error GoTo 0
 End Function
 
-Public Sub Word_ExportImages(ByVal oDoc As Object, ByVal sOutputFolder As String)
+Public Sub ExportImages(ByVal oDoc As Object, ByVal sOutputFolder As String)
     If Right$(sOutputFolder, 1) <> "\" Then sOutputFolder = sOutputFolder & "\"
     If Len(Dir(sOutputFolder, vbDirectory)) = 0 Then
         On Error Resume Next
@@ -241,9 +271,9 @@ Cleanup:
     On Error GoTo 0
 End Sub
 
-Public Function Word_GetImages(ByVal oDoc As Object) As Collection
+Public Function GetImages(ByVal oDoc As Object) As Collection
     Dim oResult  As New Collection
-    Set Word_GetImages = oResult
+    Set GetImages = oResult
     Dim oWs      As Worksheet
     Dim oIS      As Object
     Dim oSh      As Object
@@ -292,7 +322,7 @@ Public Function Word_GetImages(ByVal oDoc As Object) As Collection
     Set oWs = Nothing
     On Error GoTo 0
 
-    Set Word_GetImages = oResult
+    Set GetImages = oResult
 End Function
 
 Private Function WordCOM_PasteToFile(ByVal oWs As Worksheet, _
@@ -370,7 +400,7 @@ Private Function WordCOM_CheckCredibility(ByVal sText As String) As Long
         dAvg = Len(sSample)
     End If
 
-    If dAvg > MAX_AVG_WORDLEN Then
+    If dAvg > m_dGarbleThresh Then
         WordCOM_CheckCredibility = WDCOM_GARBLED
     Else
         WordCOM_CheckCredibility = WDCOM_OK
@@ -399,8 +429,9 @@ Private Function WordCOM_IsEncrypted(ByVal sFilePath As String) As Boolean
     WordCOM_IsEncrypted = WordCOM_HasEncryptKey(sHead) Or WordCOM_HasEncryptKey(sTail)
     Exit Function
 NotEncrypted:
-    On Error GoTo 0
+    On Error Resume Next
     If iFile > 0 Then Close #iFile
+    On Error GoTo 0
     WordCOM_IsEncrypted = False
 End Function
 
