@@ -1,6 +1,19 @@
 Attribute VB_Name = "WdCOM"
 Option Explicit
 
+Private Type GUID
+    Data1 As Long
+    Data2 As Integer
+    Data3 As Integer
+    Data4(0 To 7) As Byte
+End Type
+
+#If VBA7 Then
+    Private Declare PtrSafe Function CoCreateGuid Lib "ole32" (ByRef pguid As GUID) As Long
+#Else
+    Private Declare Function CoCreateGuid Lib "ole32" (ByRef pguid As GUID) As Long
+#End If
+
 Public Const WDCOM_OK           As Long = 0
 Public Const WDCOM_FILE_MISSING As Long = 1
 Public Const WDCOM_ENCRYPTED    As Long = 2
@@ -229,7 +242,57 @@ Cleanup:
 End Sub
 
 Public Function Word_GetImages(ByVal oDoc As Object) As Collection
+    Dim oResult  As New Collection
+    Set Word_GetImages = oResult
+    Dim oWs      As Worksheet
+    Dim oIS      As Object
+    Dim oSh      As Object
+    Dim sTmp     As String
+    Dim aBytes() As Byte
 
+    Set oWs = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+    oWs.Visible = xlSheetVeryHidden
+
+    On Error Resume Next
+
+    For Each oIS In oDoc.InlineShapes
+        Err.Clear
+        oIS.Range.CopyAsPicture
+        If Err.Number = 0 Then
+            sTmp = WordCOM_TempPath()
+            If WordCOM_PasteToFile(oWs, oIS.Width, oIS.Height, sTmp) Then
+                aBytes = WordCOM_ReadBytes(sTmp)
+                If UBound(aBytes) > 0 Then oResult.Add aBytes
+            End If
+        End If
+    Next oIS
+
+    For Each oSh In oDoc.Shapes
+        If oSh.Type = MSO_PICTURE Or _
+           oSh.Type = MSO_LINKED_PICTURE Or _
+           oSh.Type = MSO_EMBEDDED_OLE Then
+            Err.Clear
+            oSh.CopyAsPicture
+            If Err.Number = 0 Then
+                sTmp = WordCOM_TempPath()
+                If WordCOM_PasteToFile(oWs, oSh.Width, oSh.Height, sTmp) Then
+                    aBytes = WordCOM_ReadBytes(sTmp)
+                    If UBound(aBytes) > 0 Then oResult.Add aBytes
+                End If
+            End If
+        End If
+    Next oSh
+
+    On Error GoTo 0
+
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    If Not oWs Is Nothing Then oWs.Delete
+    Application.DisplayAlerts = True
+    Set oWs = Nothing
+    On Error GoTo 0
+
+    Set Word_GetImages = oResult
 End Function
 
 Private Function WordCOM_PasteToFile(ByVal oWs As Worksheet, _
@@ -281,11 +344,9 @@ Failed:
 End Function
 
 Private Function WordCOM_TempPath() As String
-    Static lSeq     As Long
-    Static sSession As String
-    If Len(sSession) = 0 Then sSession = Format$(Now, "HHMMSSss")
-    lSeq = lSeq + 1
-    WordCOM_TempPath = Environ("TEMP") & "\wdcom_" & sSession & "_" & lSeq & ".png"
+    Dim g As GUID
+    CoCreateGuid g
+    WordCOM_TempPath = Environ("TEMP") & "\wdcom_" & Right$("00000000" & Hex$(g.Data1), 8) & ".png"
 End Function
 
 Private Function WordCOM_CheckCredibility(ByVal sText As String) As Long
