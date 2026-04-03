@@ -22,13 +22,13 @@ End Type
     Private Declare Function CoCreateGuid Lib "ole32" (ByRef pguid As GUID) As Long
 #End If
 
-Public Const WDCOM_OK           As Long = 0
-Public Const WDCOM_FILE_MISSING As Long = 1
-Public Const WDCOM_ENCRYPTED    As Long = 2
-Public Const WDCOM_WORD_FAILED  As Long = 3
-Public Const WDCOM_OPEN_FAILED  As Long = 4
-Public Const WDCOM_EMPTY        As Long = 5
-Public Const WDCOM_GARBLED      As Long = 6
+Private Const WDCOM_OK           As Long = 0
+Private Const WDCOM_FILE_MISSING As Long = 1
+Private Const WDCOM_ENCRYPTED    As Long = 2
+Private Const WDCOM_WORD_FAILED  As Long = 3
+Private Const WDCOM_OPEN_FAILED  As Long = 4
+Private Const WDCOM_EMPTY        As Long = 5
+Private Const WDCOM_GARBLED      As Long = 6
 
 Private Const MSO_EMBEDDED_OLE   As Long = 7
 Private Const MSO_LINKED_PICTURE As Long = 11
